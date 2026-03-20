@@ -1,0 +1,92 @@
+version: '3.9'
+
+# ================================================================
+#  TP Sécurité — Déploiement Wazuh containerisé
+#  Auteur  : Péniel LAWSON-Body
+#  Date    : 20 mars 2026
+#
+#  Architecture :
+#    - wazuh-manager  : Wazuh Manager 4.7.3 (image officielle)
+#    - agent-debian   : Agent Wazuh sur Debian 12
+#    - agent-ubuntu   : Agent Wazuh sur Ubuntu 22.04
+#
+#  Pas d'indexeur (Elasticsearch/OpenSearch) ni de dashboard.
+#  Validation via /var/ossec/logs/alerts/alerts.json uniquement.
+# ================================================================
+
+networks:
+  wazuh-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  wazuh-manager-data:
+    driver: local
+
+services:
+
+  # ── Wazuh Manager ───────────────────────────────────────────────
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.3
+    container_name: wazuh-manager
+    hostname: wazuh-manager
+    restart: unless-stopped
+    networks:
+      wazuh-net:
+        ipv4_address: 172.20.0.2
+    ports:
+      - "1514:1514/udp"    # Réception des événements agents
+      - "1515:1515/tcp"    # Enrôlement des agents (agent-auth)
+      - "55000:55000/tcp"  # API REST Wazuh
+    volumes:
+      - wazuh-manager-data:/var/ossec
+    environment:
+      - INDEXER_ENABLED=false
+    healthcheck:
+      test: ["CMD", "/var/ossec/bin/ossec-control", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Agent Debian 12 ─────────────────────────────────────────────
+  agent-debian:
+    build:
+      context: ./agents/debian
+      dockerfile: Dockerfile
+    container_name: agent-debian
+    hostname: agent-debian
+    restart: unless-stopped
+    depends_on:
+      wazuh-manager:
+        condition: service_healthy
+    networks:
+      wazuh-net:
+        ipv4_address: 172.20.0.3
+    environment:
+      - WAZUH_MANAGER=172.20.0.2
+      - WAZUH_AGENT_NAME=agent-debian
+      - WAZUH_REGISTRATION_SERVER=172.20.0.2
+      - WAZUH_REGISTRATION_PORT=1515
+
+  # ── Agent Ubuntu 22.04 ──────────────────────────────────────────
+  agent-ubuntu:
+    build:
+      context: ./agents/ubuntu
+      dockerfile: Dockerfile
+    container_name: agent-ubuntu
+    hostname: agent-ubuntu
+    restart: unless-stopped
+    depends_on:
+      wazuh-manager:
+        condition: service_healthy
+    networks:
+      wazuh-net:
+        ipv4_address: 172.20.0.4
+    environment:
+      - WAZUH_MANAGER=172.20.0.2
+      - WAZUH_AGENT_NAME=agent-ubuntu
+      - WAZUH_REGISTRATION_SERVER=172.20.0.2
+      - WAZUH_REGISTRATION_PORT=1515
